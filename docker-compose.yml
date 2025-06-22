@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # Elasticsearch avec sécurité renforcée
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - xpack.security.enabled=true
+      - xpack.security.authc.api_key.enabled=true
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - ./certs:/usr/share/elasticsearch/config/certs
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    networks:
+      - elk
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -k https://localhost:9200/_cluster/health | grep -q '\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Logstash avec configuration sécurisée
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    container_name: logstash
+    volumes:
+      - ./pipelines:/usr/share/logstash/pipeline
+      - ./config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./certs:/usr/share/logstash/config/certs
+      - ./data:/data:ro
+    environment:
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTICSEARCH_USER=logstash_internal
+      - ELASTICSEARCH_PASSWORD=${LOGSTASH_PASSWORD}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5044:5044"
+      - "5000:5000/tcp"
+    networks:
+      - elk
+    restart: unless-stopped
+
+  # Kibana avec HTTPS
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: kibana
+    volumes:
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml
+      - ./certs:/usr/share/kibana/config/certs
+    environment:
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTICSEARCH_USER=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5601:5601"
+    networks:
+      - elk
+    restart: unless-stopped
+
+  # APM Server sécurisé
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:8.12.0
+    container_name: apm-server
+    volumes:
+      - ./config/apm-server.yml:/usr/share/apm-server/apm-server.yml
+      - ./certs:/usr/share/apm-server/config/certs
+    environment:
+      - ELASTICSEARCH_HOST=https://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=apm_user
+      - ELASTICSEARCH_PASSWORD=${APM_PASSWORD}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "8200:8200"
+    networks:
+      - elk
+    restart: unless-stopped
+
+  # Filebeat pour la collecte sécurisée des logs système
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.12.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./config/filebeat.yml:/usr/share/filebeat/filebeat.yml
+      - ./certs:/usr/share/filebeat/config/certs
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - elk
+    restart: unless-stopped
+
+volumes:
+  es_data:
+    driver: local
+
+networks:
+  elk:
+    driver: bridge
