@@ -39,7 +39,7 @@ services:
     container_name: logstash
     volumes:
       - ./pipelines:/usr/share/logstash/pipeline
-      - ./config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./config/logstash/:/usr/share/logstash/config/
       - ./certs:/usr/share/logstash/config/certs
       - ./data:/data:ro
     environment:
@@ -65,6 +65,7 @@ services:
       - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml
       - ./certs:/usr/share/kibana/config/certs
     environment:
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
       - ELASTICSEARCH_USER=kibana_system
       - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
@@ -73,6 +74,11 @@ services:
         condition: service_healthy
     ports:
       - "5601:5601"
+    cpuset: "0-3"  # Réserver 4 cœurs physiques
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1    
     networks:
       - elk
     restart: unless-stopped

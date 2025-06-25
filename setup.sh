@@ -9,6 +9,9 @@ for cmd in docker docker-compose openssl unzip; do
   fi
 done
 
+# 1. Remove existing certs
+rm -rf certs/*
+
 # Création des répertoires
 mkdir -p {config,certs,data,pipelines}
 
@@ -24,34 +27,102 @@ export APM_PASSWORD=$(generate_password)
 
 # Génération des certificats TLS
 echo "🔐 Génération des certificats..."
-docker run --rm -v $(pwd)/certs:/usr/share/elasticsearch/config/certs \
+#docker run --rm -v $(pwd)/certs:/usr/share/elasticsearch/config/certs \
+#  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
+#  bin/elasticsearch-certutil ca --pem --out /usr/share/elasticsearch/config/certs/ca.zip
+#
+#unzip -o certs/ca.zip -d certs/
+#
+#docker run --rm -v $(pwd)/certs:/usr/share/elasticsearch/config/certs \
+#  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
+#  bin/elasticsearch-certutil cert --pem --ca-cert /usr/share/elasticsearch/config/certs/ca/ca.crt \
+#  --ca-key /usr/share/elasticsearch/config/certs/ca/ca.key --out /usr/share/elasticsearch/config/certs/certs.zip
+#
+
+# Créez le répertoire certs si nécessaire
+mkdir -p certs/elasticsearch
+
+
+
+# Génération des certificats TLS
+echo "🔐 Génération des certificats..."
+docker run -u root --rm -v $(pwd)/certs:/certs \
   docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
-  bin/elasticsearch-certutil ca --pem --out /usr/share/elasticsearch/config/certs/ca.zip
+  bin/elasticsearch-certutil ca --pem --out /certs/elasticsearch/ca.zip
 
-unzip -o certs/ca.zip -d certs/
+unzip -o certs/elasticsearch/ca.zip -d certs/
 
-docker run --rm -v $(pwd)/certs:/usr/share/elasticsearch/config/certs \
+# 1. Nettoyage et préparation
+echo "🔐 Préparation des répertoires..."
+rm -rf certs
+mkdir -p certs/elasticsearch
+chmod -R 755 certs
+
+# 2. Génération auto-signée simplifiée
+echo "🔐 Génération des certificats..."
+docker run --rm -u root -v $(pwd)/certs:/certs \
   docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
-  bin/elasticsearch-certutil cert --pem --ca-cert /usr/share/elasticsearch/config/certs/ca/ca.crt \
-  --ca-key /usr/share/elasticsearch/config/certs/ca/ca.key --out /usr/share/elasticsearch/config/certs/certs.zip
+  bin/elasticsearch-certutil cert --silent --pem \
+  --self-signed \
+  --name elasticsearch \
+  --out /certs/elasticsearch.zip
 
-unzip -o certs/certs.zip -d certs/
+# 3. Extraction et réorganisation
+echo "🔐 Organisation des fichiers..."
+unzip -j -o certs/elasticsearch.zip "*/elasticsearch.*" -d certs/elasticsearch/
+
+# 4. Conversion en PKCS12
+echo "🔐 Conversion au format PKCS12..."
+openssl pkcs12 -export \
+  -in certs/elasticsearch/elasticsearch.crt \
+  -inkey certs/elasticsearch/elasticsearch.key \
+  -out certs/elasticsearch/elasticsearch.p12 \
+  -passout pass:  # Mot de passe vide pour développement
+
+# 5. Ajustement des permissions
+chmod -R 750 certs
+chown -R 1000:1000 certs
+
+echo "✅ Certificats générés avec succès !"
+echo "Arborescence finale :"
+tree certs
+
+
+
+
+
+
+
+
 
 # Configuration des fichiers YAML
 cat > config/elasticsearch.yml <<EOF
 cluster.name: "es-docker-cluster"
 network.host: 0.0.0.0
 
+
 # Configuration TLS
+#xpack.security.http.ssl:
+#  enabled: true
+#  keystore.path: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.p12
+#  verification_mode: certificate
+#
+#xpack.security.transport.ssl:
+#  enabled: true
+#  verification_mode: certificate
+#  keystore.path: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.p12
+#
+
 xpack.security.http.ssl:
   enabled: true
-  keystore.path: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.p12
-  verification_mode: certificate
+  certificate: /usr/share/elasticsearch/config/certs/elasticsearch.crt
+  key: /usr/share/elasticsearch/config/certs/elasticsearch.key
 
 xpack.security.transport.ssl:
   enabled: true
-  verification_mode: certificate
-  keystore.path: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.p12
+  certificate: /usr/share/elasticsearch/config/certs/elasticsearch.crt
+  key: /usr/share/elasticsearch/config/certs/elasticsearch.key
+
 
 # Configuration sécurité
 xpack.security.authc:
@@ -68,6 +139,8 @@ EOF
 cat > config/kibana.yml <<EOF
 server.host: "0.0.0.0"
 server.publicBaseUrl: "https://localhost:5601"
+
+
 server.ssl:
   enabled: true
   certificate: /usr/share/kibana/config/certs/kibana/kibana.crt
@@ -146,7 +219,7 @@ EOF
 
 # Démarrage des containers
 echo "🚀 Démarrage du cluster ELK..."
-docker-compose up -d
+docker-compose up -d elasticsearch
 
 echo "✅ Configuration terminée!"
 echo "🔑 Mot de passe Elastic: $ELASTIC_PASSWORD"
