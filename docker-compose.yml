@@ -4,6 +4,11 @@ services:
   # Elasticsearch avec sécurité renforcée
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    user: root
+    command: >
+      bash -c "apt update && apt install -y vim && bash"
+    tty: true
+    stdin_open: true
     container_name: elasticsearch
     environment:
       - node.name=elasticsearch

@@ -10,7 +10,7 @@ for cmd in docker docker-compose openssl unzip; do
 done
 
 # 1. Remove existing certs
-rm -rf certs/*
+
 
 # Création des répertoires
 mkdir -p {config,certs,data,pipelines}
@@ -40,53 +40,95 @@ echo "🔐 Génération des certificats..."
 #
 
 # Créez le répertoire certs si nécessaire
-mkdir -p certs/elasticsearch
+#mkdir -p certs/elasticsearch
 
-
-
-# Génération des certificats TLS
 echo "🔐 Génération des certificats..."
-docker run -u root --rm -v $(pwd)/certs:/certs \
-  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
-  bin/elasticsearch-certutil ca --pem --out /certs/elasticsearch/ca.zip
 
-unzip -o certs/elasticsearch/ca.zip -d certs/
+# 1. Création de l'autorité de certification (CA)
+#docker run --rm -u root -v $(pwd)/certs:/certs \
+#  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
+#  bin/elasticsearch-certutil ca --silent --pem --out /certs/ca.zip
+#
+#unzip certs/ca.zip -d certs/
+#
+## 2. Création des certificats pour Elasticsearch
+#docker run --rm -u root -v $(pwd)/certs:/certs \
+#  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
+#  bin/elasticsearch-certutil cert --silent --pem \
+#  --ca-cert /certs/ca/ca.crt --ca-key /certs/ca/ca.key \
+#  --name elasticsearch --dns elasticsearch,localhost --ip 127.0.0.1 \
+#  --out /certs/elasticsearch.zip
+#
+#unzip certs/elasticsearch.zip -d certs/elasticsearch/
+#
 
-# 1. Nettoyage et préparation
-echo "🔐 Préparation des répertoires..."
+
+#!/bin/bash
+set -euo pipefail
+
+# Nettoyage et préparation
 rm -rf certs
-mkdir -p certs/elasticsearch
-chmod -R 755 certs
+mkdir -p certs
 
-# 2. Génération auto-signée simplifiée
+# 1. Génération de l'AC (Autorité de Certification)
+echo "🔐 Génération de l'AC..."
+docker run --rm -u root -v $(pwd)/certs:/certs \
+  docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
+  bin/elasticsearch-certutil ca --silent --pem --out /certs/ca.zip
+
+unzip certs/ca.zip -d certs/
+
+# 2. Génération des certificats
 echo "🔐 Génération des certificats..."
 docker run --rm -u root -v $(pwd)/certs:/certs \
   docker.elastic.co/elasticsearch/elasticsearch:8.12.0 \
   bin/elasticsearch-certutil cert --silent --pem \
-  --self-signed \
-  --name elasticsearch \
-  --out /certs/elasticsearch.zip
+  --ca-cert /certs/ca/ca.crt --ca-key /certs/ca/ca.key \
+  --name elasticsearch --dns localhost --ip 127.0.0.1 \
+  --out /certs/certs.zip
 
-# 3. Extraction et réorganisation
-echo "🔐 Organisation des fichiers..."
-unzip -j -o certs/elasticsearch.zip "*/elasticsearch.*" -d certs/elasticsearch/
+# 3. Organisation des fichiers
+echo "📁 Organisation des certificats..."
+unzip certs/certs.zip -d certs/elasticsearch/
+mv certs/elasticsearch/elasticsearch/* certs/elasticsearch/
+rmdir certs/elasticsearch/elasticsearch
+cp certs/ca/ca.crt certs/elasticsearch/
 
-# 4. Conversion en PKCS12
-echo "🔐 Conversion au format PKCS12..."
-openssl pkcs12 -export \
-  -in certs/elasticsearch/elasticsearch.crt \
-  -inkey certs/elasticsearch/elasticsearch.key \
-  -out certs/elasticsearch/elasticsearch.p12 \
-  -passout pass:  # Mot de passe vide pour développement
+# 4. Copie pour les autres services
+for service in kibana logstash apm-server; do
+  mkdir -p certs/$service
+  cp certs/elasticsearch/* certs/$service/
+done
 
-# 5. Ajustement des permissions
+# 5. Nettoyage
+rm certs/ca.zip certs/certs.zip
+
+# 6. Ajustement des permissions
 chmod -R 750 certs
 chown -R 1000:1000 certs
 
 echo "✅ Certificats générés avec succès !"
-echo "Arborescence finale :"
 tree certs
 
+
+tree certs
+## Structure finale des certificats
+#mkdir -p certs/{elasticsearch,kibana,logstash,apm-server}
+#cp certs/ca/ca.crt certs/elasticsearch/
+#cp certs/elasticsearch/* certs/elasticsearch/
+#cp certs/ca/ca.crt certs/kibana/
+#cp certs/elasticsearch/* certs/kibana/
+#cp certs/ca/ca.crt certs/logstash/
+#cp certs/elasticsearch/* certs/logstash/
+#cp certs/ca/ca.crt certs/apm-server/
+#cp certs/elasticsearch/* certs/apm-server/
+#
+# Ajustement des permissions
+chmod -R 750 certs
+chown -R 1000:1000 certs
+chmod 644 certs/elasticsearch/*
+chmod 600 certs/elasticsearch/*.key
+echo "✅ Certificats générés avec succès!"
 
 
 
@@ -112,18 +154,40 @@ network.host: 0.0.0.0
 #  verification_mode: certificate
 #  keystore.path: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.p12
 #
+#/usr/share/elasticsearch/config/certs
+
+#certs
+#├── ca
+#│   ├── ca.crt
+#│   └── ca.key
+#├── ca.zip
+#├── elasticsearch
+#│   └── elasticsearch
+#│       ├── elasticsearch.crt
+#│       └── elasticsearch.key
+#└── elasticsearch.zip
+#
 
 xpack.security.http.ssl:
   enabled: true
   certificate: /usr/share/elasticsearch/config/certs/elasticsearch.crt
   key: /usr/share/elasticsearch/config/certs/elasticsearch.key
-
-xpack.security.transport.ssl:
-  enabled: true
-  certificate: /usr/share/elasticsearch/config/certs/elasticsearch.crt
-  key: /usr/share/elasticsearch/config/certs/elasticsearch.key
+  #certificate_authorities: ["/usr/share/elasticsearch/config/certs/ca.crt"]
 
 
+#xpack.security.http.ssl:
+#  enabled: true
+#  certificate: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch/elasticsearch.crt
+#  key: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch/elasticsearch.key
+#  certificate_authorities: [/usr/share/elasticsearch/config/certs/ca/ca.crt]
+#
+#xpack.security.transport.ssl:
+#  enabled: true
+#  verification_mode: certificate
+#  certificate: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch/elasticsearch.crt
+#  key: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch/elasticsearch.key
+#  certificate_authorities: [/usr/share/elasticsearch/config/certs/ca/ca.crt]
+#
 # Configuration sécurité
 xpack.security.authc:
   api_key.enabled: true
