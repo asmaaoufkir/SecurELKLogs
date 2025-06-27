@@ -23,7 +23,7 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
       - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
-      - ./certs:/usr/share/elasticsearch/config/certs
+      - ./certs/:/usr/share/elasticsearch/config/certs/
     ulimits:
       memlock:
         soft: -1
