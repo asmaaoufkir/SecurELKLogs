@@ -1,12 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+
 # Configuration
 STACK_VERSION=${STACK_VERSION:-8.12.0}
 ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
 CLUSTER_NAME=${CLUSTER_NAME:-es-docker-cluster}
 KIBANA_TOKEN=${KIBANA_TOKEN:-AAEAAWVsYXN0aWMva2liYW5hL215LWtpYmFuYS10b2tlbjoxZWdoS2gxLVFWaWNzZ0ZNd0FyVmRB}
-
+KIBANA_CLE=${KIBANA_CLE:-5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6}
 echo "🔐 Génération des certificats SSL pour ELK Stack (compatible Docker)..."
 echo "Version: $STACK_VERSION"
 echo "Cluster: $CLUSTER_NAME"
@@ -71,8 +72,21 @@ mkdir -p ca elasticsearch kibana logstash apm-server filebeat metricbeat
 cp ca-cert.pem ca/ca.crt
 cp ca-key.pem ca/ca.key
 
+# Génération des certificats Kibana
+echo "Génération des certificats spécifiques pour Kibana..."
+openssl genrsa -out kibana-key.pem 4096
+openssl req -new -key kibana-key.pem -out kibana-req.pem \
+  -subj "/C=MA/ST=Casablanca/L=Casablanca/O=ELK/CN=kibana"
+openssl x509 -req -in kibana-req.pem -CA ca-cert.pem -CAkey ca-key.pem \
+  -CAcreateserial -out kibana-cert.pem -days 365 \
+  -extensions v3_req -extfile server-extensions.cnf
+
+# Copie des certificats Kibana
+cp kibana-cert.pem kibana/kibana.crt
+cp kibana-key.pem kibana/kibana.key
+
 # Services
-for service in elasticsearch kibana logstash apm-server filebeat metricbeat; do
+for service in elasticsearch logstash apm-server filebeat metricbeat; do
     cp ca-cert.pem $service/ca.crt
     cp server-cert.pem $service/elasticsearch.crt
     cp server-key.pem $service/elasticsearch.key
@@ -85,9 +99,12 @@ echo "🐳 Configuration des permissions pour Docker..."
 
 # Méthode compatible sans sudo
 chmod -R 755 .
-chmod 644 */ca.crt */elasticsearch.crt */elasticsearch.key
-chmod 600 ca/ca.key
+chmod 644 */ca.crt */*.crt */*.key
+chmod 644 kibana/kibana.crt
+chmod 600 kibana/kibana.key
 
+chmod 600 ca/ca.key
+rm -f kibana-*.pem
 # Si nous avons les droits sudo, nous pouvons être plus précis
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
     echo "🔐 Application des permissions propriétaires avec sudo..."
@@ -120,13 +137,23 @@ echo "🔍 Vérification du certificat :"
 openssl x509 -in certs/elasticsearch/elasticsearch.crt -noout -text | grep -A 15 "X509v3 Subject Alternative Name" || echo "Certificat généré (vérification SAN non disponible sur cette version d'OpenSSL)"
 
 echo ""
-echo "🧪 Test de validation du certificat :"
+echo "🧪 Test de validation du certificat pour Elasticsrearch :"
 if openssl verify -CAfile certs/ca/ca.crt certs/elasticsearch/elasticsearch.crt; then
     echo "✅ Certificat valide !"
 else
     echo "❌ Problème avec le certificat"
     exit 1
 fi
+
+echo "🧪 Test de validation du certificat pour Kibana :"
+if openssl verify -CAfile certs/ca/ca.crt certs/kibana/kibana.crt; then
+    echo "✅ Certificat valide !"
+else
+    echo "❌ Problème avec le certificat"
+    exit 1
+fi
+
+
 
 echo ""
 echo "🔑 Génération du fichier .env pour Docker Compose..."
@@ -207,52 +234,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-
-  #token-generator:
-  #  image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
-  #  container_name: token
-  #  depends_on:
-  #    elasticsearch:
-  #      condition: service_healthy
-  #  volumes:
-  #    - ./tokens:/usr/tokens
-  #    - ./certs:/usr/share/elasticsearch/config/certs:ro
-  #  #command: >
-  #  #  bash -c "
-  #  #    mkdir -p /usr/tokens &&
-  #  #    sleep 15 &&
-  #  #    echo 'Test de connexion à Elasticsearch...' &&
-  #  #    until curl --cacert config/certs/ca.crt --cert config/certs/elasticsearch.crt --key config/certs/elasticsearch.key -u elastic:${ELASTIC_PASSWORD} -s https://elasticsearch:9200/_cluster/health; do  
-  #  #      echo 'En attente Elasticsearch...'
-  #  #      sleep 5
-  #  #    done &&
-  #  #    echo 'Génération du token...' &&
-  #  #    bin/elasticsearch-service-tokens create elastic/kibana my-kibana-token > /usr/tokens/kibana-token.txt 2>&1 &&
-  #  #    echo 'Token créé:' &&
-  #  #    cat /usr/tokens/kibana-token.txt
-  #  #  "
-
-  #  command: >
-  #    bash -c "
-  #      set -e
-  #      mkdir -p /usr/tokens
-  #      sleep 15
-  #      echo 'Test de connexion à Elasticsearch sur https://elasticsearch:9200...'
-  #      
-  #      # Test avec verbose pour debug
-  #      curl --cacert config/certs/ca.crt --cert config/certs/elasticsearch.crt --key config/certs/elasticsearch.key -u elastic:${ELASTIC_PASSWORD} -v https://elasticsearch:9200/_cluster/health
-  #      
-  #      if [ $? -eq 0 ]; then
-  #        echo 'Connexion réussie, génération du token...'
-  #        bin/elasticsearch-service-tokens create elastic/kibana my-kibana-token > /usr/tokens/kibana-token.txt 2>&1
-  #        echo 'Token créé:'
-  #        cat /usr/tokens/kibana-token.txt
-  #      else
-  #        echo 'Échec de connexion à Elasticsearch'
-  #        exit 1
-  #      fi
-  #    "
   
+
   token-generator:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
     container_name: token
@@ -260,24 +243,12 @@ services:
       elasticsearch:
         condition: service_healthy
     volumes:
+      - ./generate-token.sh:/generate-token.sh
       - ./tokens:/usr/tokens
-      - ./certs/ca.crt:/tmp/ca.crt:ro
-      - ./certs/elasticsearch/elasticsearch.crt:/tmp/elasticsearch.crt:ro
-      - ./certs/elasticsearch/elasticsearch.key:/tmp/elasticsearch.key:ro
-    command: >
-      bash -c "
-        mkdir -p /usr/tokens &&
-        sleep 15 &&
-        echo 'Test de connexion à Elasticsearch...' &&
-        until curl --cacert /tmp/ca.crt --cert /tmp/elasticsearch.crt --key /tmp/elasticsearch.key -u elastic:${ELASTIC_PASSWORD} -s https://elasticsearch:9200/_cluster/health; do  
-          echo 'En attente Elasticsearch...'
-          sleep 5
-        done &&
-        echo 'Génération du token...' &&
-        bin/elasticsearch-service-tokens create elastic/kibana my-kibana-token > /usr/tokens/kibana-token.txt 2>&1 &&
-        echo 'Token créé:' &&
-        cat /usr/tokens/kibana-token.txt
-      "
+      - ./certs/ca/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+      - ./certs/elasticsearch/elasticsearch.crt:/usr/share/elasticsearch/config/certs/elasticsearch.crt:ro
+      - ./certs/elasticsearch/elasticsearch.key:/usr/share/elasticsearch/config/certs/elasticsearch.key:ro
+    command: ["/bin/bash", "/generate-token.sh"]
     networks:
       - elk
     environment:
@@ -290,20 +261,27 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    
+
     environment:
-      - SERVERNAME=kibana
-      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-      # Utiliser le token au lieu de username/password
-     #- ELASTICSEARCH_SERVICEACCOUNTTOKEN=${KIBANA_TOKEN}
-      - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/tokens/kibana-token.txt      
-      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
-      - SERVER_SSL_ENABLED=true
-      - SERVER_SSL_CERTIFICATE=config/certs/kibana/elasticsearch.crt
-      - SERVER_SSL_KEY=config/certs/kibana/elasticsearch.key
+       - NODE_OPTIONS=--openssl-legacy-provider      
+#      - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/tokens/kibana-token.txt
+#      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+#      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
+#      - SERVER_SSL_ENABLED=true
+#      - SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana/kibana.crt
+#      - SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana/kibana.key
+#      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f
+
+#       - ELASTICSEARCH_SERVICEACCOUNTTOKEN=${KIBANA_TOKEN}
+#       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+#       - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
     volumes:
+      - ./tokens:/tokens:ro
       - ./certs:/usr/share/kibana/config/certs:ro
       - kibanadata:/usr/share/kibana/data
-      - ./tokens:/usr/share/kibana/config/tokens:ro
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml 
+
     ports:
       - \${KIBANA_PORT}:5601
     networks:
@@ -356,6 +334,55 @@ http.port: 9200
 EOF
 
 
+# Génération du Token de Kibana
+# Définir les permissions
+chmod 644 tokens/kibana-token.txt
+chown 1000:1000 tokens/kibana-token.txt
+
+# Chemin du fichier token
+TOKEN_FILE="tokens/kibana-token.txt"
+
+# 1. Vérifier que le fichier existe
+if [ ! -f "$TOKEN_FILE" ]; then
+  echo "ERREUR : Fichier $TOKEN_FILE introuvable" >&2
+  exit 1
+fi
+
+# 2. Lire le contenu directement
+KIBANA_TOKEN=$(cat "$TOKEN_FILE")
+
+# 3. Vérifier que le token n'est pas vide
+if [ -z "$KIBANA_TOKEN" ]; then
+  echo "ERREUR : Le fichier token est vide" >&2
+  exit 1
+fi
+
+# 4. Utilisation exemple
+echo "Token Kibana : ${KIBANA_TOKEN}"
+
+
+
+
+cat > config/kibana.yml <<EOF
+# Configuration SSL pour Kibana
+server.ssl:
+  enabled: true
+  certificate: /usr/share/kibana/config/certs/kibana/kibana.crt
+  key: /usr/share/kibana/config/certs/kibana/kibana.key
+  certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
+
+elasticsearch.hosts: ["https://elasticsearch:9200"]
+elasticsearch.serviceAccountToken: ${KIBANA_TOKEN}
+elasticsearch.ssl:
+  certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
+  verificationMode: certificate
+
+xpack.security.encryptionKey: ${KIBANA_CLE}
+xpack.encryptedSavedObjects:
+  encryptionKey: ${KIBANA_CLE}
+xpack.reporting.encryptionKey: ${KIBANA_CLE}
+
+EOF
 
 
 
@@ -377,3 +404,5 @@ echo "🛡️  Sécurité :"
 echo "- Les certificats sont valides pour 365 jours"
 echo "- Changez le mot de passe par défaut en production"
 echo "- SSL/TLS activé sur HTTP et Transport"
+
+
