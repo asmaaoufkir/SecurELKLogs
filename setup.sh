@@ -6,7 +6,7 @@ set -euo pipefail
 STACK_VERSION=${STACK_VERSION:-8.12.0}
 ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
 CLUSTER_NAME=${CLUSTER_NAME:-es-docker-cluster}
-KIBANA_TOKEN=${KIBANA_TOKEN:-AAEAAWVsYXN0aWMva2liYW5hL215LWtpYmFuYS10b2tlbjoxZWdoS2gxLVFWaWNzZ0ZNd0FyVmRB}
+#KIBANA_TOKEN=${KIBANA_TOKEN:-AAEAAWVsYXN0aWMva2liYW5hL215LWtpYmFuYS10b2tlbjoxZWdoS2gxLVFWaWNzZ0ZNd0FyVmRB}
 KIBANA_CLE=${KIBANA_CLE:-5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6}
 echo "🔐 Génération des certificats SSL pour ELK Stack (compatible Docker)..."
 echo "Version: $STACK_VERSION"
@@ -168,7 +168,7 @@ ELASTIC_PASSWORD=$ELASTIC_PASSWORD
 CLUSTER_NAME=$CLUSTER_NAME
 LICENSE=basic
 MEM_LIMIT=1073741824
-
+KIBANA_CLE=$KIBANA_CLE
 # Ports
 ES_PORT=9200
 KIBANA_PORT=5601
@@ -184,6 +184,7 @@ CERTS_DIR=./certs
 # Configuration réseau
 ES_HOST=elasticsearch
 KIBANA_HOST=kibana
+
 
 # Configuration Docker
 ELASTICSEARCH_UID=1000
@@ -217,6 +218,8 @@ services:
       - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
       - xpack.security.transport.ssl.verification_mode=certificate
       - xpack.license.self_generated.type=\${LICENSE}
+      - xpack.security.authc.token.enabled=true
+      - xpack.security.authc.api_key.enabled=true
     ulimits:
       memlock:
         soft: -1
@@ -264,20 +267,35 @@ services:
     
 
     environment:
-       - NODE_OPTIONS=--openssl-legacy-provider      
-#      - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/tokens/kibana-token.txt
-#      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-#      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
-#      - SERVER_SSL_ENABLED=true
-#      - SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana/kibana.crt
-#      - SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana/kibana.key
-#      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f5a1b3c8e9f0d7e2f
+      - NODE_OPTIONS=--openssl-legacy-provider
 
-#       - ELASTICSEARCH_SERVICEACCOUNTTOKEN=${KIBANA_TOKEN}
-#       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-#       - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+
+      - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/usr/tokens/kibana-token.txt
+
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
+
+      - SERVER_SSL_ENABLED=true
+
+      - SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana/kibana.crt
+
+      - SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana/kibana.key
+
+      - SERVER_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
+
+      - SERVER_HOST=0.0.0.0
+
+      - SERVER_PORT=5601
+
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=\${KIBANA_CLE}
+
+      - XPACK_REPORTING_ENCRYPTIONKEY=\${KIBANA_CLE}
+
+      - XPACK_SECURITY_ENCRYPTIONKEY=\${KIBANA_CLE}
+
+      - LOGGING_ROOT_LEVEL=debug
     volumes:
-      - ./tokens:/tokens:ro
+      - ./tokens:/usr/tokens:ro
       - ./certs:/usr/share/kibana/config/certs:ro
       - kibanadata:/usr/share/kibana/data
       - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml 
@@ -287,7 +305,7 @@ services:
     networks:
       - elk
     healthcheck:
-      test: ["CMD-SHELL", "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'"]
+      test: ["CMD-SHELL", "curl -s -I -k https://localhost:5601/api/status | grep -q '200 OK'"]
       interval: 10s
       timeout: 10s
       retries: 120
@@ -328,6 +346,8 @@ xpack.security.transport.ssl:
   key: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.key
   certificate_authorities: ["/usr/share/elasticsearch/config/certs/elasticsearch/ca.crt"]
 
+xpack.security.enrollment.enabled: true
+
 # Configuration réseau
 transport.port: 9300
 http.port: 9200
@@ -359,7 +379,7 @@ fi
 
 # 4. Utilisation exemple
 echo "Token Kibana : ${KIBANA_TOKEN}"
-
+echo "Clé de Kibana: ${KIBANA_CLE}"
 
 
 
@@ -372,7 +392,7 @@ server.ssl:
   certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
 
 elasticsearch.hosts: ["https://elasticsearch:9200"]
-elasticsearch.serviceAccountToken: ${KIBANA_TOKEN}
+#elasticsearch.serviceAccountToken: ${KIBANA_TOKEN}
 elasticsearch.ssl:
   certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
   verificationMode: certificate
