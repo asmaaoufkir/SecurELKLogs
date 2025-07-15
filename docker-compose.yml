@@ -1,132 +1,125 @@
-version: '3.8'
 
 services:
-  # Elasticsearch avec sécurité renforcée
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    user: root
-    command: >
-      bash -c "apt update && apt install -y vim && bash"
-    tty: true
-    stdin_open: true
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
     container_name: elasticsearch
     environment:
       - node.name=elasticsearch
-      - cluster.name=es-docker-cluster
+      - cluster.name=${CLUSTER_NAME}
       - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
-      - xpack.security.enabled=true
-      - xpack.security.authc.api_key.enabled=true
-      - xpack.security.transport.ssl.verification_mode=certificate
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
-      - ./certs/:/usr/share/elasticsearch/config/certs/
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.http.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=${LICENSE}
+      - xpack.security.authc.token.enabled=true
+      - xpack.security.authc.api_key.enabled=true
+      - xpack.security.enrollment.enabled=true
     ulimits:
       memlock:
         soft: -1
         hard: -1
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs:ro
+      - esdata:/usr/share/elasticsearch/data
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml 
     ports:
-      - "9200:9200"
+      - ${ES_PORT}:9200
     networks:
       - elk
     healthcheck:
-      test: ["CMD-SHELL", "curl -s -k https://localhost:9200/_cluster/health | grep -q '\"status\":\"yellow\"'"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"]
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 120
+  
 
-  # Logstash avec configuration sécurisée
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.12.0
-    container_name: logstash
-    volumes:
-      - ./pipelines:/usr/share/logstash/pipeline
-      - ./config/logstash/:/usr/share/logstash/config/
-      - ./certs:/usr/share/logstash/config/certs
-      - ./data:/data:ro
-    environment:
-      - LS_JAVA_OPTS=-Xms1g -Xmx1g
-      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-      - ELASTICSEARCH_USER=logstash_internal
-      - ELASTICSEARCH_PASSWORD=${LOGSTASH_PASSWORD}
+  token-generator:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: token
     depends_on:
       elasticsearch:
         condition: service_healthy
-    ports:
-      - "5044:5044"
-      - "5000:5000/tcp"
+    volumes:
+      - ./generate-token.sh:/generate-token.sh
+      - ./tokens:/usr/tokens
+      - ./certs/ca/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+      - ./certs/elasticsearch/elasticsearch.crt:/usr/share/elasticsearch/config/certs/elasticsearch.crt:ro
+      - ./certs/elasticsearch/elasticsearch.key:/usr/share/elasticsearch/config/certs/elasticsearch.key:ro
+    command: ["/bin/bash", "/generate-token.sh"]
     networks:
       - elk
-    restart: unless-stopped
+    environment:
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTIC_PASSWORD=changeme
+      - KIBANA_TOKEN=${KIBANA_TOKEN}
 
-  # Kibana avec HTTPS
   kibana:
-    image: docker.elastic.co/kibana/kibana:8.12.0
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
     container_name: kibana
-    volumes:
-      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml
-      - ./certs:/usr/share/kibana/config/certs
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    
+
     environment:
-      - LS_JAVA_OPTS=-Xms1g -Xmx1g
+      - NODE_OPTIONS=--openssl-legacy-provider
+
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-      - ELASTICSEARCH_USER=kibana_system
-      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    ports:
-      - "5601:5601"
-    cpuset: "0-3"  # Réserver 4 cœurs physiques
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1    
-    networks:
-      - elk
-    restart: unless-stopped
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_TOKEN=${KIBANA_TOKEN}
+      - KIBANA_ENCRYPTION_KEY=${KIBANA_ENCRYPTION_KEY}
+      - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/usr/tokens/kibana-token.txt
 
-  # APM Server sécurisé
-  apm-server:
-    image: docker.elastic.co/apm/apm-server:8.12.0
-    container_name: apm-server
-    volumes:
-      - ./config/apm-server.yml:/usr/share/apm-server/apm-server.yml
-      - ./certs:/usr/share/apm-server/config/certs
-    environment:
-      - ELASTICSEARCH_HOST=https://elasticsearch:9200
-      - ELASTICSEARCH_USERNAME=apm_user
-      - ELASTICSEARCH_PASSWORD=${APM_PASSWORD}
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    ports:
-      - "8200:8200"
-    networks:
-      - elk
-    restart: unless-stopped
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
 
-  # Filebeat pour la collecte sécurisée des logs système
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.12.0
-    container_name: filebeat
-    user: root
+      - SERVER_SSL_ENABLED=true
+
+      - SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana/kibana.crt
+
+      - SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana/kibana.key
+
+      - SERVER_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
+
+      - SERVER_HOST=0.0.0.0
+
+      - SERVER_PORT=5601
+
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+
+      - LOGGING_ROOT_LEVEL=debug
     volumes:
-      - ./config/filebeat.yml:/usr/share/filebeat/filebeat.yml
-      - ./certs:/usr/share/filebeat/config/certs
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
+      - ./tokens:/usr/tokens:ro
+      - ./certs:/usr/share/kibana/config/certs:ro
+      - kibanadata:/usr/share/kibana/data
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml 
+
+    ports:
+      - ${KIBANA_PORT}:5601
     networks:
       - elk
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -I -k https://localhost:5601/api/status | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
 
 volumes:
-  es_data:
+  esdata:
+    driver: local
+  kibanadata:
     driver: local
 
 networks:

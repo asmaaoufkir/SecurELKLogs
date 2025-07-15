@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Variables
+ELASTIC_PASSWORD="${ELASTIC_PASSWORD:-ZvSzbUsSY9yDKx4U2AvVZ8NZI4XIGWnt}"
+
+echo "🧪 Tests de connexion SSL à Elasticsearch..."
+
+# Attendre que le service soit prêt
+echo "⏳ Attente du démarrage d'Elasticsearch..."
+sleep 30
+
+# Test 1: Connexion sans SSL (pour debug)
+echo "Test 1: Vérification que le port 9200 répond..."
+curl -m 10 -s http://localhost:9200 || echo "❌ HTTP non disponible (normal si SSL activé)"
+
+# Test 2: Connexion SSL sans vérification de certificat
+echo "Test 2: Connexion SSL sans vérification..."
+curl -k -m 10 -s -u elastic:$ELASTIC_PASSWORD https://localhost:9200 || echo "❌ SSL sans vérification échoué"
+
+# Test 3: Connexion SSL avec CA
+echo "Test 3: Connexion SSL avec CA..."
+curl -m 10 -s --cacert certs/ca/ca.crt -u elastic:$ELASTIC_PASSWORD https://localhost:9200 || echo "❌ SSL avec CA échoué"
+
+# Test 4: Connexion SSL complète (si nécessaire)
+echo "Test 4: Connexion SSL avec certificat client..."
+curl -m 10 -s \
+  --cacert certs/ca/ca.crt \
+  --cert certs/elasticsearch/elasticsearch.crt \
+  --key certs/elasticsearch/elasticsearch.key \
+  -u elastic:$ELASTIC_PASSWORD \
+  https://localhost:9200 || echo "❌ SSL complet échoué"
+
+# Test 5: Diagnostic du certificat
+echo "Test 5: Diagnostic du certificat..."
+echo | openssl s_client -connect localhost:9200 -servername localhost 2>/dev/null | openssl x509 -noout -subject -issuer -dates || echo "❌ Impossible de récupérer le certificat du serveur"
+
+# Test 6: Vérification interne du container
+echo "Test 6: Test depuis l'intérieur du container..."
+docker exec elasticsearch curl -k -s https://localhost:9200 || echo "❌ Test interne échoué"
+
+# Affichage des logs récents
+echo "📋 Logs récents d'Elasticsearch:"
+docker logs elasticsearch --tail 20
+
+echo ""
+echo "🔧 COMMANDES DE DEBUG SUPPLÉMENTAIRES:"
+echo "1. Vérifier les logs: docker logs elasticsearch"
+echo "2. Accéder au container: docker exec -it elasticsearch bash"
+echo "3. Vérifier la config: docker exec elasticsearch cat /usr/share/elasticsearch/config/elasticsearch.yml"
+echo "4. Lister les certificats: docker exec elasticsearch ls -la /usr/share/elasticsearch/config/certs/"

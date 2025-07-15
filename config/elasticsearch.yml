@@ -1,0 +1,24 @@
+cluster.name: "es-docker-cluster"
+network.host: 0.0.0.0
+
+
+# Configuration TLS
+xpack.security.http.ssl:
+  enabled: true
+  certificate: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.crt
+  key: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.key
+  certificate_authorities: ["/usr/share/elasticsearch/config/certs/elasticsearch/ca.crt"]
+  verification_mode: certificate
+
+xpack.security.transport.ssl:
+  enabled: true
+  verification_mode: certificate
+  certificate: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.crt
+  key: /usr/share/elasticsearch/config/certs/elasticsearch/elasticsearch.key
+  certificate_authorities: ["/usr/share/elasticsearch/config/certs/elasticsearch/ca.crt"]
+
+xpack.security.enrollment.enabled: true
+
+# Configuration réseau
+transport.port: 9300
+http.port: 9200

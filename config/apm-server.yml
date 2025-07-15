@@ -1,0 +1,14 @@
+apm-server:
+  host: "0.0.0.0:8200"
+  ssl:
+    certificate: /usr/share/apm-server/config/certs/apm-server/apm-server.crt
+    key: /usr/share/apm-server/config/certs/apm-server/apm-server.key
+
+output.elasticsearch:
+  hosts: ["https://elasticsearch:9200"]
+  ssl:
+    certificate_authorities: /usr/share/apm-server/config/certs/ca/ca.crt
+    verification_mode: certificate
+
+# Configuration sécurité
+apm-server.api_key.enabled: true

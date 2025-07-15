@@ -7,7 +7,7 @@ STACK_VERSION=${STACK_VERSION:-8.12.0}
 ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
 CLUSTER_NAME=${CLUSTER_NAME:-es-docker-cluster}
 #KIBANA_TOKEN=${KIBANA_TOKEN:-AAEAAWVsYXN0aWMva2liYW5hL215LWtpYmFuYS10b2tlbjoxZWdoS2gxLVFWaWNzZ0ZNd0FyVmRB}
-KIBANA_CLE=${KIBANA_CLE:-5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6}
+KIBANA_ENCRYPTION_KEY=${KIBANA_ENCRYPTION_KEY:-5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6}
 echo "🔐 Génération des certificats SSL pour ELK Stack (compatible Docker)..."
 echo "Version: $STACK_VERSION"
 echo "Cluster: $CLUSTER_NAME"
@@ -92,6 +92,7 @@ for service in elasticsearch logstash apm-server filebeat metricbeat; do
     cp server-key.pem $service/elasticsearch.key
 done
 
+
 # 7. Permissions spéciales pour Docker
 echo "🐳 Configuration des permissions pour Docker..."
 # Elasticsearch dans Docker s'exécute avec l'UID 1000
@@ -168,7 +169,7 @@ ELASTIC_PASSWORD=$ELASTIC_PASSWORD
 CLUSTER_NAME=$CLUSTER_NAME
 LICENSE=basic
 MEM_LIMIT=1073741824
-KIBANA_CLE=$KIBANA_CLE
+KIBANA_ENCRYPTION_KEY=$KIBANA_ENCRYPTION_KEY
 # Ports
 ES_PORT=9200
 KIBANA_PORT=5601
@@ -220,6 +221,7 @@ services:
       - xpack.license.self_generated.type=\${LICENSE}
       - xpack.security.authc.token.enabled=true
       - xpack.security.authc.api_key.enabled=true
+      - xpack.security.enrollment.enabled=true
     ulimits:
       memlock:
         soft: -1
@@ -257,6 +259,7 @@ services:
     environment:
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_TOKEN=\${KIBANA_TOKEN}
 
   kibana:
     image: docker.elastic.co/kibana/kibana:\${STACK_VERSION}
@@ -270,7 +273,9 @@ services:
       - NODE_OPTIONS=--openssl-legacy-provider
 
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-
+      - ELASTIC_PASSWORD=\${ELASTIC_PASSWORD}
+      - KIBANA_TOKEN=\${KIBANA_TOKEN}
+      - KIBANA_ENCRYPTION_KEY=\${KIBANA_ENCRYPTION_KEY}
       - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/usr/tokens/kibana-token.txt
 
       - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
@@ -287,11 +292,11 @@ services:
 
       - SERVER_PORT=5601
 
-      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=\${KIBANA_CLE}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=\${KIBANA_ENCRYPTION_KEY}
 
-      - XPACK_REPORTING_ENCRYPTIONKEY=\${KIBANA_CLE}
+      - XPACK_REPORTING_ENCRYPTIONKEY=\${KIBANA_ENCRYPTION_KEY}
 
-      - XPACK_SECURITY_ENCRYPTIONKEY=\${KIBANA_CLE}
+      - XPACK_SECURITY_ENCRYPTIONKEY=\${KIBANA_ENCRYPTION_KEY}
 
       - LOGGING_ROOT_LEVEL=debug
     volumes:
@@ -354,12 +359,8 @@ http.port: 9200
 EOF
 
 
-# Génération du Token de Kibana
-# Définir les permissions
-chmod 644 tokens/kibana-token.txt
-chown 1000:1000 tokens/kibana-token.txt
-
 # Chemin du fichier token
+
 TOKEN_FILE="tokens/kibana-token.txt"
 
 # 1. Vérifier que le fichier existe
@@ -379,28 +380,43 @@ fi
 
 # 4. Utilisation exemple
 echo "Token Kibana : ${KIBANA_TOKEN}"
-echo "Clé de Kibana: ${KIBANA_CLE}"
+echo "Clé de Kibana: ${KIBANA_ENCRYPTION_KEY}"
 
 
 
 cat > config/kibana.yml <<EOF
 # Configuration SSL pour Kibana
+server.host: "0.0.0.0"
+server.port: 5601
+
+# SSL (HTTPS)
 server.ssl:
   enabled: true
   certificate: /usr/share/kibana/config/certs/kibana/kibana.crt
   key: /usr/share/kibana/config/certs/kibana/kibana.key
-  certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
+  certificateAuthorities: ["/usr/share/kibana/config/certs/ca/ca.crt"]
 
+# Connexion à Elasticsearch
 elasticsearch.hosts: ["https://elasticsearch:9200"]
-#elasticsearch.serviceAccountToken: ${KIBANA_TOKEN}
 elasticsearch.ssl:
-  certificateAuthorities: ["/usr/share/kibana/config/certs/elasticsearch/ca.crt"]
-  verificationMode: certificate
+  certificateAuthorities: ["/usr/share/kibana/config/certs/ca/ca.crt"]
+  verificationMode: "full"
 
-xpack.security.encryptionKey: ${KIBANA_CLE}
-xpack.encryptedSavedObjects:
-  encryptionKey: ${KIBANA_CLE}
-xpack.reporting.encryptionKey: ${KIBANA_CLE}
+# Authentification par Token de Service (obligatoire en 8.12.0)
+elasticsearch.serviceAccountToken: "${KIBANA_TOKEN}"
+
+# Clés de chiffrement (32 caractères minimum)
+xpack.security.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.encryptedSavedObjects.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.reporting.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+
+# Logging
+logging.appenders:
+  default:
+    type: console
+    layout:
+      type: json
+logging.root.level: info
 
 EOF
 

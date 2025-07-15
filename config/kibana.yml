@@ -1,0 +1,33 @@
+# Configuration SSL pour Kibana
+server.host: "0.0.0.0"
+server.port: 5601
+
+# SSL (HTTPS)
+server.ssl:
+  enabled: true
+  certificate: /usr/share/kibana/config/certs/kibana/kibana.crt
+  key: /usr/share/kibana/config/certs/kibana/kibana.key
+  certificateAuthorities: ["/usr/share/kibana/config/certs/ca/ca.crt"]
+
+# Connexion à Elasticsearch
+elasticsearch.hosts: ["https://elasticsearch:9200"]
+elasticsearch.ssl:
+  certificateAuthorities: ["/usr/share/kibana/config/certs/ca/ca.crt"]
+  verificationMode: "full"
+
+# Authentification par Token de Service (obligatoire en 8.12.0)
+elasticsearch.serviceAccountToken: "AAEAAWVsYXN0aWMva2liYW5hL215LWtpYmFuYS10b2tlbjp1dEJmTnQ2bVNzLWZGcjE5Z3RCcEZB"
+
+# Clés de chiffrement (32 caractères minimum)
+xpack.security.encryptionKey: "5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6"
+xpack.encryptedSavedObjects.encryptionKey: "5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6"
+xpack.reporting.encryptionKey: "5e7ccbdd01f6ec2c368020de79a5a5340a8908f35eb84d044778d9ab2ea70dd6"
+
+# Logging
+logging.appenders:
+  default:
+    type: console
+    layout:
+      type: json
+logging.root.level: info
+
