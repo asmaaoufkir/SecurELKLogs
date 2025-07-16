@@ -259,7 +259,7 @@ services:
     environment:
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-      - KIBANA_TOKEN=\${KIBANA_TOKEN}
+     # - KIBANA_TOKEN=\${KIBANA_TOKEN}
 
   kibana:
     image: docker.elastic.co/kibana/kibana:\${STACK_VERSION}
@@ -315,10 +315,50 @@ services:
       timeout: 10s
       retries: 120
 
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - NODE_NAME=logstash
+      - XPACK_MONITORING_ENABLED=false
+      - PIPELINE_WORKERS=1
+      - PIPELINE_BATCH_SIZE=125
+      - PIPELINE_BATCH_DELAY=50
+      - LS_JAVA_OPTS=-Xmx1g -Xms1g
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - PATH_CONFIG=/usr/share/logstash/pipeline
+      - PATH_DATA=/usr/share/logstash/data
+      - PATH_LOGS=/usr/share/logstash/logs
+    volumes:
+      - ./certs:/usr/share/logstash/config/certs:ro
+      - ./config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./pipeline:/usr/share/logstash/pipeline:ro
+      - /tmp/logstash:/tmp/logstash
+      - logstashdata:/usr/share/logstash/data
+    ports:
+      - "5044:5044"
+      - "5000:5000/tcp"
+      - "5000:5000/udp"
+      - "9600:9600"
+    networks:
+      - elk
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9600/_node/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   esdata:
     driver: local
   kibanadata:
+    driver: local
+  logstashdata:
     driver: local
 
 networks:
@@ -420,10 +460,100 @@ logging.root.level: info
 
 EOF
 
+cat > config/logstash.yml <<EOF
+# Configuration principale de Logstash
+# Configuration principale de Logstash
+# Les paramètres principaux sont définis via les variables d'environnement
+
+# Configuration réseau
+http.host: "0.0.0.0"
+http.port: 9600
+
+# Configuration des logs
+log.level: info
+log.format: json
+
+# Configuration du pipeline principal
+config.reload.automatic: true
+config.reload.interval: 3s
+
+# Configuration API
+api.enabled: true
+api.http.host: "0.0.0.0"
+api.http.port: 9600
+
+# Configuration des plugins
+plugin_use_bouncy_castle_jars: true
+
+EOF
 
 
-echo ""
-echo "📝 Prochaines étapes :"
+# Créer les répertoires
+mkdir -p config pipeline pipelines
+mkdir -p /tmp/logstash
+
+# Créer le fichier logstash.yml simplifié
+cat > config/logstash.yml << 'EOF'
+# Configuration principale de Logstash
+http.host: "0.0.0.0"
+http.port: 9600
+log.level: info
+log.format: json
+config.reload.automatic: true
+config.reload.interval: 3s
+api.enabled: true
+api.http.host: "0.0.0.0"
+api.http.port: 9600
+plugin_use_bouncy_castle_jars: true
+EOF
+
+# Créer le fichier pipelines.yml
+cat > config/pipelines.yml << 'EOF'
+- pipeline.id: main
+  path.config: "/usr/share/logstash/pipeline/logstash.conf"
+  pipeline.workers: 1
+  pipeline.batch.size: 125
+  pipeline.batch.delay: 50
+EOF
+
+# Créer le pipeline de base
+cat > pipeline/logstash.conf << 'EOF'
+input {
+  beats {
+    port => 5044
+  }
+
+  tcp {
+    port => 5000
+    codec => json_lines
+  }
+}
+
+filter {
+  mutate {
+    add_field => { "processed_by" => "logstash" }
+    add_field => { "processed_at" => "%{[@timestamp]}" }
+  }
+}
+
+output {
+  elasticsearch {
+    hosts => ["https://elasticsearch:9200"]
+    ssl => true
+    cacert => "/usr/share/logstash/config/certs/ca/ca.crt"
+    ssl_certificate => "/usr/share/logstash/config/certs/elasticsearch/elasticsearch.crt"
+    ssl_key => "/usr/share/logstash/config/certs/elasticsearch/elasticsearch.key"
+    ssl_certificate_verification => true
+    user => "elastic"
+    password => "${ELASTIC_PASSWORD}"
+    index => "logstash-%{+YYYY.MM.dd}"
+  }
+}
+EOF
+
+# Ajuster les permissions
+chmod 644 config/logstash.yml config/pipelines.yml pipeline/logstash.conf
+
 echo "1. Lancez votre stack ELK avec: docker-compose up -d"
 echo "2. Surveillez les logs avec: docker-compose logs -f"
 echo "3. Accédez à Kibana: https://localhost:5601"
