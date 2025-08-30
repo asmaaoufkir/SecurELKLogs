@@ -60,52 +60,37 @@ services:
     environment:
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
       - ELASTIC_PASSWORD=changeme
-      - KIBANA_TOKEN=${KIBANA_TOKEN}
+     # - KIBANA_TOKEN=${KIBANA_TOKEN}
 
   kibana:
     image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
     container_name: kibana
     depends_on:
       elasticsearch:
-        condition: service_healthy
-    
-
+        condition: service_healthy    
     environment:
       - NODE_OPTIONS=--openssl-legacy-provider
-
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
       - KIBANA_TOKEN=${KIBANA_TOKEN}
       - KIBANA_ENCRYPTION_KEY=${KIBANA_ENCRYPTION_KEY}
       - ELASTICSEARCH_SERVICEACCOUNTTOKEN_FILE=/usr/tokens/kibana-token.txt
-
       - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
-
       - SERVER_SSL_ENABLED=true
-
       - SERVER_SSL_CERTIFICATE=/usr/share/kibana/config/certs/kibana/kibana.crt
-
       - SERVER_SSL_KEY=/usr/share/kibana/config/certs/kibana/kibana.key
-
       - SERVER_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/ca/ca.crt
-
       - SERVER_HOST=0.0.0.0
-
       - SERVER_PORT=5601
-
       - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
-
       - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
-
       - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
-
       - LOGGING_ROOT_LEVEL=debug
     volumes:
       - ./tokens:/usr/tokens:ro
       - ./certs:/usr/share/kibana/config/certs:ro
       - kibanadata:/usr/share/kibana/data
       - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml 
-
     ports:
       - ${KIBANA_PORT}:5601
     networks:
@@ -116,10 +101,44 @@ services:
       timeout: 10s
       retries: 120
 
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - NODE_NAME=logstash
+      - XPACK_MONITORING_ENABLED=false
+      - PIPELINE_WORKERS=1
+      - PIPELINE_BATCH_SIZE=125
+      - PIPELINE_BATCH_DELAY=50
+      - LS_JAVA_OPTS=-Xmx1g -Xms1g
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+    volumes:
+      - ./certs:/usr/share/logstash/config/certs:ro
+      - ./pipeline:/usr/share/logstash/pipeline:ro
+      - logstashdata:/usr/share/logstash/data
+    ports:
+      - "5044:5044"
+      - "5000:5000/tcp"
+      - "5000:5000/udp"
+      - "9600:9600"
+    networks:
+      - elk
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9600/_node/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   esdata:
     driver: local
   kibanadata:
+    driver: local
+  logstashdata:
     driver: local
 
 networks:

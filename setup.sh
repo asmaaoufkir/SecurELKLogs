@@ -85,8 +85,24 @@ openssl x509 -req -in kibana-req.pem -CA ca-cert.pem -CAkey ca-key.pem \
 cp kibana-cert.pem kibana/kibana.crt
 cp kibana-key.pem kibana/kibana.key
 
+
+# Génération des certificats Logstash
+echo "Génération des certificats spécifiques pour Logstash..."
+openssl genrsa -out logstash-key.pem 4096
+openssl req -new -key logstash-key.pem -out logstash-req.pem \
+  -subj "/C=MA/ST=Casablanca/L=Casablanca/O=ELK/CN=logstash"
+openssl x509 -req -in logstash-req.pem -CA ca-cert.pem -CAkey ca-key.pem \
+  -CAcreateserial -out logstash-cert.pem -days 365 \
+  -extensions v3_req -extfile server-extensions.cnf
+
+# Copie des certificats Kibana
+cp kibana-cert.pem kibana/kibana.crt
+cp kibana-key.pem kibana/kibana.key
+cp logstash-cert.pem logstash/logstash.crt
+cp logstash-key.pem logstash/logstash.key
+
 # Services
-for service in elasticsearch logstash apm-server filebeat metricbeat; do
+for service in elasticsearch apm-server filebeat metricbeat; do
     cp ca-cert.pem $service/ca.crt
     cp server-cert.pem $service/elasticsearch.crt
     cp server-key.pem $service/elasticsearch.key
@@ -100,12 +116,11 @@ echo "🐳 Configuration des permissions pour Docker..."
 
 # Méthode compatible sans sudo
 chmod -R 755 .
-chmod 644 */ca.crt */*.crt */*.key
-chmod 644 kibana/kibana.crt
-chmod 600 kibana/kibana.key
-
+chmod 644 */ca.crt */*.crt 
+chmod 600 */*.key
 chmod 600 ca/ca.key
-rm -f kibana-*.pem
+rm -f kibana-*.pem logstash-*.pem
+
 # Si nous avons les droits sudo, nous pouvons être plus précis
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
     echo "🔐 Application des permissions propriétaires avec sudo..."
@@ -154,6 +169,13 @@ else
     exit 1
 fi
 
+echo "🧪 Test de validation du certificat pour Logstash :"
+if openssl verify -CAfile certs/ca/ca.crt certs/logstash/logstash.crt; then
+    echo "✅ Certificat valide !"
+else
+    echo "❌ Problème avec le certificat"
+    exit 1
+fi
 
 
 echo ""
@@ -316,7 +338,7 @@ services:
       retries: 120
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    image: docker.elastic.co/logstash/logstash:\${STACK_VERSION}
     container_name: logstash
     depends_on:
       elasticsearch:
@@ -328,17 +350,11 @@ services:
       - PIPELINE_BATCH_SIZE=125
       - PIPELINE_BATCH_DELAY=50
       - LS_JAVA_OPTS=-Xmx1g -Xms1g
-      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ELASTIC_PASSWORD=\${ELASTIC_PASSWORD}
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-      - PATH_CONFIG=/usr/share/logstash/pipeline
-      - PATH_DATA=/usr/share/logstash/data
-      - PATH_LOGS=/usr/share/logstash/logs
     volumes:
       - ./certs:/usr/share/logstash/config/certs:ro
-      - ./config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
-      - ./config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./pipeline:/usr/share/logstash/pipeline:ro
-      - /tmp/logstash:/tmp/logstash
       - logstashdata:/usr/share/logstash/data
     ports:
       - "5044:5044"
@@ -368,6 +384,40 @@ EOF
 
 echo "✅ Fichier docker-compose.yml créé"
 
+# Créer le pipeline de base pour Logstash avec certificats spécifiques
+cat > pipeline/logstash.conf <<'EOF'
+input {
+  beats {
+    port => 5044
+  }
+
+  tcp {
+    port => 5000
+    codec => json_lines
+  }
+}
+
+filter {
+  mutate {
+    add_field => { "processed_by" => "logstash" }
+    add_field => { "processed_at" => "%{[@timestamp]}" }
+  }
+}
+
+output {
+  elasticsearch {
+    hosts => ["https://elasticsearch:9200"]
+    # Configuration SSL simplifiée - seulement vérification du serveur
+    ssl_enabled => true
+    ssl_certificate_authorities => "/usr/share/logstash/config/certs/ca/ca.crt"
+    ssl_verification_mode => "full"
+    user => "elastic"
+    password => "${ELASTIC_PASSWORD}"
+    index => "logstash-%{+YYYY.MM.dd}"
+  }
+}
+
+EOF
 
 
 # Configuration des fichiers YAML
@@ -460,99 +510,6 @@ logging.root.level: info
 
 EOF
 
-cat > config/logstash.yml <<EOF
-# Configuration principale de Logstash
-# Configuration principale de Logstash
-# Les paramètres principaux sont définis via les variables d'environnement
-
-# Configuration réseau
-http.host: "0.0.0.0"
-http.port: 9600
-
-# Configuration des logs
-log.level: info
-log.format: json
-
-# Configuration du pipeline principal
-config.reload.automatic: true
-config.reload.interval: 3s
-
-# Configuration API
-api.enabled: true
-api.http.host: "0.0.0.0"
-api.http.port: 9600
-
-# Configuration des plugins
-plugin_use_bouncy_castle_jars: true
-
-EOF
-
-
-# Créer les répertoires
-mkdir -p config pipeline pipelines
-mkdir -p /tmp/logstash
-
-# Créer le fichier logstash.yml simplifié
-cat > config/logstash.yml << 'EOF'
-# Configuration principale de Logstash
-http.host: "0.0.0.0"
-http.port: 9600
-log.level: info
-log.format: json
-config.reload.automatic: true
-config.reload.interval: 3s
-api.enabled: true
-api.http.host: "0.0.0.0"
-api.http.port: 9600
-plugin_use_bouncy_castle_jars: true
-EOF
-
-# Créer le fichier pipelines.yml
-cat > config/pipelines.yml << 'EOF'
-- pipeline.id: main
-  path.config: "/usr/share/logstash/pipeline/logstash.conf"
-  pipeline.workers: 1
-  pipeline.batch.size: 125
-  pipeline.batch.delay: 50
-EOF
-
-# Créer le pipeline de base
-cat > pipeline/logstash.conf << 'EOF'
-input {
-  beats {
-    port => 5044
-  }
-
-  tcp {
-    port => 5000
-    codec => json_lines
-  }
-}
-
-filter {
-  mutate {
-    add_field => { "processed_by" => "logstash" }
-    add_field => { "processed_at" => "%{[@timestamp]}" }
-  }
-}
-
-output {
-  elasticsearch {
-    hosts => ["https://elasticsearch:9200"]
-    ssl => true
-    cacert => "/usr/share/logstash/config/certs/ca/ca.crt"
-    ssl_certificate => "/usr/share/logstash/config/certs/elasticsearch/elasticsearch.crt"
-    ssl_key => "/usr/share/logstash/config/certs/elasticsearch/elasticsearch.key"
-    ssl_certificate_verification => true
-    user => "elastic"
-    password => "${ELASTIC_PASSWORD}"
-    index => "logstash-%{+YYYY.MM.dd}"
-  }
-}
-EOF
-
-# Ajuster les permissions
-chmod 644 config/logstash.yml config/pipelines.yml pipeline/logstash.conf
 
 echo "1. Lancez votre stack ELK avec: docker-compose up -d"
 echo "2. Surveillez les logs avec: docker-compose logs -f"
