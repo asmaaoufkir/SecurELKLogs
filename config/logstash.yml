@@ -1,0 +1,27 @@
+# Configuration de base
+node.name: logstash-node-01
+path.data: /usr/share/logstash/data
+path.config: /etc/logstash/conf.d
+path.logs: /usr/share/logstash/logs
+
+# Configuration Persistent Queue
+queue.type: persisted
+queue.max_events: 0
+queue.max_bytes: 2gb
+queue.checkpoint.writes: 1024
+queue.checkpoint.interval: 1000
+queue.page_capacity: 64mb
+queue.max_bytes_unread: 1gb
+
+# Dead Letter Queue
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1gb
+
+# Monitoring et métriques
+monitoring.enabled: true
+monitoring.elasticsearch.hosts: ["https://elasticsearch:9200"]
+
+# Performance
+pipeline.workers: 4
+pipeline.batch.size: 1000
+pipeline.batch.delay: 50

@@ -3,3 +3,10 @@
   pipeline.workers: 1
   pipeline.batch.size: 125
   pipeline.batch.delay: 50
+
+- pipeline.id: test
+  path.config: "/usr/share/logstash/pipeline/test.conf"
+
+- pipeline.id: logs
+  path.config: "/usr/share/logstash/pipeline/logs-Apache.conf"
+

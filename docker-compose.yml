@@ -59,7 +59,7 @@ services:
       - elk
     environment:
       - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
-      - ELASTIC_PASSWORD=changeme
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
      # - KIBANA_TOKEN=${KIBANA_TOKEN}
 
   kibana:
@@ -100,7 +100,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 120
-
+  
   logstash:
     image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
     container_name: logstash
@@ -120,9 +120,13 @@ services:
       - ./certs:/usr/share/logstash/config/certs:ro
       - ./pipeline:/usr/share/logstash/pipeline:ro
       - logstashdata:/usr/share/logstash/data
+      - ./data/logs:/usr/share/logstash/config/data/logs 
+      - ./config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./config/logstash.yml:/usr/share/kibana/config/logstash.yml
     ports:
       - "5044:5044"
       - "5000:5000/tcp"
+      - "5001:5001/tcp"  
       - "5000:5000/udp"
       - "9600:9600"
     networks:
